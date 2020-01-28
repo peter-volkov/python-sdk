@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
-from sys import stdout
+import logging
 
+import google.protobuf.empty_pb2 as empty_pb2
 from google.protobuf.field_mask_pb2 import FieldMask
 
 import yandex.cloud.dataproc.v1.common_pb2 as common_pb
@@ -20,8 +22,13 @@ import yandexcloud
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
     arguments = parse_cmd()
-    sdk = yandexcloud.SDK(token=arguments.token)
+    if arguments.token:
+        sdk = yandexcloud.SDK(token=arguments.token)
+    else:
+        with open(arguments.sa_json_path) as infile:
+            sdk = yandexcloud.SDK(service_account_key=json.load(infile))
 
     fill_missing_flags(sdk, arguments)
 
@@ -34,7 +41,7 @@ def main():
     cluster_id = None
     try:
         cluster = create_cluster(sdk, req)
-        cluster_id = cluster.id
+        cluster_id = cluster.response.id
         change_cluster_description(sdk, cluster_id)
         add_subcluster(sdk, cluster_id, arguments, resources=resources)
 
@@ -50,10 +57,16 @@ def main():
 def parse_cmd():
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument('--token', help='OAuth token')
-    parser.add_argument('--folder-id', help='Your Yandex.Cloud folder id')
+    auth = parser.add_mutually_exclusive_group(required=True)
+    auth.add_argument(
+        '--sa-json-path',
+        help='Path to the service account key JSON file.\nThis file can be created using YC CLI:\n'
+        'yc iam key create --output sa.json --service-account-id <id>',
+    )
+    auth.add_argument('--token', help='OAuth token')
+    parser.add_argument('--folder-id', help='Your Yandex.Cloud folder id', required=True)
     parser.add_argument('--zone', default='ru-central1-b', help='Compute Engine zone to deploy to')
     parser.add_argument('--network-id', default='', help='Your Yandex.Cloud network id')
     parser.add_argument('--subnet-id', default='', help='Subnet for the cluster')
@@ -64,8 +77,7 @@ def parse_cmd():
         default='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII7JOBFU5LGCd/ET220neX7MiWIXHnZI9ZfFjjgnPMmh'
     )
     parser.add_argument('--service-account-id', default='')
-    parser.add_argument('--s3-bucket', default='')
-
+    parser.add_argument('--s3-bucket', required=True)
     return parser.parse_args()
 
 
@@ -75,10 +87,10 @@ def fill_missing_flags(sdk, arguments):
             arguments.ssh_public_key = infile.read().strip()
 
     if not arguments.network_id:
-        arguments.network_id = sdk.helpers.find_network(folder_id=arguments.folder_id)
+        arguments.network_id = sdk.helpers.find_network_id(folder_id=arguments.folder_id)
 
     if not arguments.subnet_id:
-        arguments.subnet_id = sdk.helpers.find_subnet(
+        arguments.subnet_id = sdk.helpers.find_subnet_id(
             folder_id=arguments.folder_id,
             zone_id=arguments.zone,
             network_id=arguments.network_id
@@ -90,22 +102,15 @@ def fill_missing_flags(sdk, arguments):
 
 def create_cluster(sdk, req):
     operation = sdk.client(cluster_service_grpc_pb.ClusterServiceStub).Create(req)
-
-    meta = cluster_service_pb.CreateClusterMetadata()
-    operation.metadata.Unpack(meta)
-
-    print('Creating cluster {}'.format(meta.cluster_id))
-    operation = sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-
-    cluster = cluster_pb.Cluster()
-    operation.response.Unpack(cluster)
-    if not cluster:
-        raise RuntimeError('Cluster was not created')
-    return cluster
+    return sdk.get_operation_result(
+        operation,
+        response_type=cluster_pb.Cluster,
+        meta_type=cluster_service_pb.CreateClusterMetadata,
+    )
 
 
 def add_subcluster(sdk, cluster_id, params, resources):
-    print('Adding subcluster to cluster {}'.format(cluster_id))
+    logging.info('Adding subcluster to cluster {}'.format(cluster_id))
     req = subcluster_service_pb.CreateSubclusterRequest(
         cluster_id=cluster_id,
         name='compute',
@@ -116,32 +121,40 @@ def add_subcluster(sdk, cluster_id, params, resources):
     )
 
     operation = sdk.client(subcluster_service_grpc_pb.SubclusterServiceStub).Create(req)
-    operation = sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-
-    subcluster = subcluster_pb.Subcluster()
-    operation.response.Unpack(subcluster)
-    return subcluster
+    return sdk.get_operation_result(
+        operation,
+        response_type=subcluster_pb.Subcluster,
+        meta_type=subcluster_service_pb.CreateSubclusterMetadata,
+    )
 
 
 def change_cluster_description(sdk, cluster_id):
-    print('Updating cluster {}'.format(cluster_id))
+    logging.info('Updating cluster {}'.format(cluster_id))
     mask = FieldMask(paths=['description'])
     update_req = cluster_service_pb.UpdateClusterRequest(cluster_id=cluster_id, update_mask=mask,
                                                          description='New cluster description')
 
     operation = sdk.client(cluster_service_grpc_pb.ClusterServiceStub).Update(update_req)
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
+    return sdk.get_operation_result(
+        operation,
+        response_type=cluster_pb.Cluster,
+        meta_type=cluster_service_pb.UpdateClusterMetadata,
+    )
 
 
 def delete_cluster(sdk, cluster_id):
-    print('Deleting cluster {}'.format(cluster_id))
+    logging.info('Deleting cluster {}'.format(cluster_id))
     operation = sdk.client(cluster_service_grpc_pb.ClusterServiceStub).Delete(
         cluster_service_pb.DeleteClusterRequest(cluster_id=cluster_id))
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
+    return sdk.get_operation_result(
+        operation,
+        response_type=empty_pb2.Empty,
+        meta_type=cluster_service_pb.DeleteClusterMetadata,
+    )
 
 
 def run_hive_job(sdk, cluster_id):
-    print('Running Hive job {}'.format(cluster_id))
+    logging.info('Running Hive job {}'.format(cluster_id))
     operation = sdk.client(job_service_grpc_pb.JobServiceStub).Create(
         job_service_pb.CreateJobRequest(
             cluster_id=cluster_id,
@@ -153,14 +166,14 @@ def run_hive_job(sdk, cluster_id):
                     'COUNTRY_CODE': 'RU',
                 }
             )
+
         )
     )
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-    return operation
+    return sdk.get_operation_result(operation, response_type=job_pb.Job, meta_type=job_service_pb.CreateJobMetadata)
 
 
 def run_mapreduce_job(sdk, cluster_id, bucket):
-    print('Running Mapreduce job {}'.format(cluster_id))
+    logging.info('Running Mapreduce job {}'.format(cluster_id))
     operation = sdk.client(job_service_grpc_pb.JobServiceStub).Create(
         job_service_pb.CreateJobRequest(
             cluster_id=cluster_id,
@@ -186,12 +199,11 @@ def run_mapreduce_job(sdk, cluster_id, bucket):
             )
         )
     )
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-    return operation
+    return sdk.get_operation_result(operation, response_type=job_pb.Job, meta_type=job_service_pb.CreateJobMetadata)
 
 
 def run_spark_job(sdk, cluster_id, bucket):
-    print('Running Spark job {}'.format(cluster_id))
+    logging.info('Running Spark job {}'.format(cluster_id))
     operation = sdk.client(job_service_grpc_pb.JobServiceStub).Create(
         job_service_pb.CreateJobRequest(
             cluster_id=cluster_id,
@@ -221,12 +233,11 @@ def run_spark_job(sdk, cluster_id, bucket):
             )
         )
     )
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-    return operation
+    return sdk.get_operation_result(operation, response_type=job_pb.Job, meta_type=job_service_pb.CreateJobMetadata)
 
 
 def run_pyspark_job(sdk, cluster_id, bucket):
-    print('Running Pyspark job {}'.format(cluster_id))
+    logging.info('Running Pyspark job {}'.format(cluster_id))
     operation = sdk.client(job_service_grpc_pb.JobServiceStub).Create(
         job_service_pb.CreateJobRequest(
             cluster_id=cluster_id,
@@ -257,8 +268,7 @@ def run_pyspark_job(sdk, cluster_id, bucket):
             )
         )
     )
-    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
-    return operation
+    return sdk.get_operation_result(operation, response_type=job_pb.Job, meta_type=job_service_pb.CreateJobMetadata)
 
 
 def create_cluster_request(params, resources):

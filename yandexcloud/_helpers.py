@@ -34,7 +34,7 @@ class Helpers(object):
             'There are more than one service account in folder {folder_id}, please specify it'.format(folder_id=folder_id)
         )
 
-    def find_network(self, folder_id):
+    def find_network_id(self, folder_id):
         """
         Get ID of the first network in folder
 
@@ -54,7 +54,7 @@ class Helpers(object):
             )
         return networks[0].id
 
-    def find_subnet(self, folder_id, zone_id, network_id):
+    def find_subnet_id(self, folder_id, zone_id, network_id):
         """
         Get ID of the subnetwork of specified network in specified availability zone
 

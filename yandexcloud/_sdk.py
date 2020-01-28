@@ -31,6 +31,9 @@ class SDK(object):
     def wait_for_operation(self, operation_id, timeout=None, print_to_stream=None):
         return _operation_waiter.wait_for_operation(self, operation_id, timeout, print_to_stream)
 
+    def get_operation_result(self, operation, response_type=None, meta_type=None, timeout=None, logger=None):
+        return _operation_waiter.get_operation_result(self, operation, response_type, meta_type, timeout, logger)
+
 
 def _service_for_ctor(stub_ctor):
     m = inspect.getmodule(stub_ctor)
