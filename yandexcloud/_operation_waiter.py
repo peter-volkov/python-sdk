@@ -9,6 +9,16 @@ def operation_waiter(sdk, operation_id, timeout):
     return OperationWaiter(operation_id, operation_service, timeout)
 
 
+def wait_for_operation(sdk, operation_id, timeout, print_to_stream=None):
+    waiter = operation_waiter(sdk, operation_id, timeout)
+    for _ in operation_waiter(sdk, operation_id, timeout):
+        if print_to_stream:
+            print_to_stream.write('.')
+            print_to_stream.flush()
+        time.sleep(1)
+    return waiter.operation
+
+
 class OperationWaiter:
     def __init__(self, operation_id, operation_service, timeout=None):
         self.__operation = None

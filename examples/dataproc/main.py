@@ -1,17 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import sys
-import time
+from sys import stdout
 
 from google.protobuf.field_mask_pb2 import FieldMask
-
-from yandex.cloud.vpc.v1.network_service_pb2 import ListNetworksRequest
-from yandex.cloud.vpc.v1.network_service_pb2_grpc import NetworkServiceStub
-from yandex.cloud.vpc.v1.subnet_service_pb2 import ListSubnetsRequest
-from yandex.cloud.vpc.v1.subnet_service_pb2_grpc import SubnetServiceStub
-from yandex.cloud.iam.v1.service_account_service_pb2 import ListServiceAccountsRequest
-from yandex.cloud.iam.v1.service_account_service_pb2_grpc import ServiceAccountServiceStub
 
 import yandex.cloud.dataproc.v1.common_pb2 as common_pb
 import yandex.cloud.dataproc.v1.cluster_pb2 as cluster_pb
@@ -25,17 +17,6 @@ import yandex.cloud.dataproc.v1.subcluster_service_pb2 as subcluster_service_pb
 import yandex.cloud.dataproc.v1.subcluster_service_pb2_grpc as subcluster_service_grpc_pb
 
 import yandexcloud
-
-
-def wait_for_operation(sdk, op):
-    waiter = sdk.waiter(op.id)
-    for _ in waiter:
-        sys.stdout.write('.')
-        sys.stdout.flush()
-        time.sleep(1)
-
-    print('done')
-    return waiter.operation
 
 
 def main():
@@ -94,54 +75,17 @@ def fill_missing_flags(sdk, arguments):
             arguments.ssh_public_key = infile.read().strip()
 
     if not arguments.network_id:
-        arguments.network_id = find_network(sdk, arguments.folder_id)
+        arguments.network_id = sdk.helpers.find_network(folder_id=arguments.folder_id)
 
     if not arguments.subnet_id:
-        arguments.subnet_id = find_subnet(
-            sdk,
+        arguments.subnet_id = sdk.helpers.find_subnet(
             folder_id=arguments.folder_id,
             zone_id=arguments.zone,
             network_id=arguments.network_id
         )
 
     if not arguments.service_account_id:
-        arguments.service_account_id = find_service_account_id(sdk, folder_id=arguments.folder_id)
-
-
-def find_service_account_id(sdk, folder_id):
-    service = sdk.client(ServiceAccountServiceStub)
-    service_accounts = service.List(ListServiceAccountsRequest(folder_id=folder_id)).service_accounts
-    if len(service_accounts) == 1:
-        return service_accounts[0].id
-    if len(service_accounts) == 0:
-        message = 'There are no service accounts in folder {}, please create it.'
-        raise RuntimeError(message.format(folder_id))
-    message = 'There are more than one service account in folder {}, please specify it'
-    raise RuntimeError(message.format(folder_id))
-
-
-def find_network(sdk, folder_id):
-    networks = sdk.client(NetworkServiceStub).List(ListNetworksRequest(folder_id=folder_id)).networks
-    networks = [n for n in networks if n.folder_id == folder_id]
-
-    if not networks:
-        raise RuntimeError('No networks in folder: {}'.format(folder_id))
-
-    return networks[0].id
-
-
-def find_subnet(sdk, folder_id, zone_id, network_id):
-    subnet_service = sdk.client(SubnetServiceStub)
-    subnets = subnet_service.List(ListSubnetsRequest(
-        folder_id=folder_id)).subnets
-    applicable = [s for s in subnets if s.zone_id == zone_id and s.network_id == network_id]
-    if len(applicable) == 1:
-        return applicable[0].id
-    if len(applicable) == 0:
-        message = 'There are no subnets in {} zone, please create it.'
-        raise RuntimeError(message.format(zone_id))
-    message = 'There are more than one subnet in {} zone, please specify it'
-    raise RuntimeError(message.format(zone_id))
+        arguments.service_account_id = sdk.helpers.find_service_account_id(folder_id=arguments.folder_id)
 
 
 def create_cluster(sdk, req):
@@ -151,7 +95,7 @@ def create_cluster(sdk, req):
     operation.metadata.Unpack(meta)
 
     print('Creating cluster {}'.format(meta.cluster_id))
-    operation = wait_for_operation(sdk, operation)
+    operation = sdk.wait_for_operation(operation.id, print_to_stream=stdout)
 
     cluster = cluster_pb.Cluster()
     operation.response.Unpack(cluster)
@@ -172,7 +116,7 @@ def add_subcluster(sdk, cluster_id, params, resources):
     )
 
     operation = sdk.client(subcluster_service_grpc_pb.SubclusterServiceStub).Create(req)
-    operation = wait_for_operation(sdk, operation)
+    operation = sdk.wait_for_operation(operation.id, print_to_stream=stdout)
 
     subcluster = subcluster_pb.Subcluster()
     operation.response.Unpack(subcluster)
@@ -186,19 +130,19 @@ def change_cluster_description(sdk, cluster_id):
                                                          description='New cluster description')
 
     operation = sdk.client(cluster_service_grpc_pb.ClusterServiceStub).Update(update_req)
-    wait_for_operation(sdk, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
 
 
 def delete_cluster(sdk, cluster_id):
     print('Deleting cluster {}'.format(cluster_id))
     operation = sdk.client(cluster_service_grpc_pb.ClusterServiceStub).Delete(
         cluster_service_pb.DeleteClusterRequest(cluster_id=cluster_id))
-    wait_for_operation(sdk, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
 
 
-def run_hive_job(self, cluster_id):
+def run_hive_job(sdk, cluster_id):
     print('Running Hive job {}'.format(cluster_id))
-    operation = self.client(job_service_grpc_pb.JobServiceStub).Create(
+    operation = sdk.client(job_service_grpc_pb.JobServiceStub).Create(
         job_service_pb.CreateJobRequest(
             cluster_id=cluster_id,
             name='Hive job 1',
@@ -211,7 +155,7 @@ def run_hive_job(self, cluster_id):
             )
         )
     )
-    wait_for_operation(self, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
     return operation
 
 
@@ -242,7 +186,7 @@ def run_mapreduce_job(sdk, cluster_id, bucket):
             )
         )
     )
-    wait_for_operation(sdk, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
     return operation
 
 
@@ -277,7 +221,7 @@ def run_spark_job(sdk, cluster_id, bucket):
             )
         )
     )
-    wait_for_operation(sdk, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
     return operation
 
 
@@ -313,7 +257,7 @@ def run_pyspark_job(sdk, cluster_id, bucket):
             )
         )
     )
-    wait_for_operation(sdk, operation)
+    sdk.wait_for_operation(operation.id, print_to_stream=stdout)
     return operation
 
 
