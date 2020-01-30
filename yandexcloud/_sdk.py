@@ -34,6 +34,14 @@ class SDK(object):
     def get_operation_result(self, operation, response_type=None, meta_type=None, timeout=None, logger=None):
         return _operation_waiter.get_operation_result(self, operation, response_type, meta_type, timeout, logger)
 
+    def create_operation_and_get_result(self, request, service, method_name, response_type, meta_type):
+        operation = getattr(self.client(service), method_name)(request)
+        return self.get_operation_result(
+            operation,
+            response_type=response_type,
+            meta_type=meta_type,
+        )
+
 
 def _service_for_ctor(stub_ctor):
     m = inspect.getmodule(stub_ctor)

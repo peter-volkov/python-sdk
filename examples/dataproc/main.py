@@ -37,10 +37,9 @@ def main():
         disk_size=15 * (1024 ** 3),
         disk_type_id='network-ssd',
     )
-    req = create_cluster_request(arguments, resources=resources)
     cluster_id = None
     try:
-        cluster = create_cluster(sdk, req)
+        cluster = create_cluster(sdk, create_cluster_request(arguments, resources=resources))
         cluster_id = cluster.response.id
         change_cluster_description(sdk, cluster_id)
         add_subcluster(sdk, cluster_id, arguments, resources=resources)
